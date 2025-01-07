@@ -160,8 +160,12 @@ class InnerNode extends BPlusNode {
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
-        return;
+        int idx = 0;
+        while (idx < keys.size() && key.compareTo(keys.get(idx)) >= 0) { // key >= keys[idx]
+            idx++;
+        }
+        getChild(idx).remove(key);
+        sync();
     }
 
     // Helpers /////////////////////////////////////////////////////////////////
