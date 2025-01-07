@@ -143,8 +143,12 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
+        LeafNode leaf = root.get(key);
+        int idx = Collections.binarySearch(leaf.getKeys(), key);
+        if (idx < 0) { return Optional.empty(); }
 
-        return Optional.empty();
+        return Optional.of(leaf.getRids().get(idx));
+//        return leaf.getKey(key);
     }
 
     /**
@@ -254,8 +258,16 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
-
-        return;
+        Optional<Pair<DataBox, Long>> splitResult = root.put(key, rid);
+        if (splitResult.isPresent()) {
+            List<DataBox> newKeys = new ArrayList<>();
+            List<Long> newChildren = new ArrayList<>();
+            newKeys.add(splitResult.get().getFirst());
+            newChildren.add(root.getPage().getPageNum());
+            newChildren.add(splitResult.get().getSecond());
+            InnerNode newRoot = new InnerNode(metadata, bufferManager, newKeys, newChildren, lockContext);
+            updateRoot(newRoot);
+        }
     }
 
     /**

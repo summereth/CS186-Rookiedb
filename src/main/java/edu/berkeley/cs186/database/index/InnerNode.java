@@ -81,8 +81,12 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
+        int idx = 0;
+        while (idx < keys.size() && key.compareTo(keys.get(idx)) >= 0) { // key >= keys[idx]
+            idx++;
+        }
 
-        return null;
+        return getChild(idx).get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -91,14 +95,55 @@ class InnerNode extends BPlusNode {
         assert(children.size() > 0);
         // TODO(proj2): implement
 
-        return null;
+        return getChild(0).getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        int childIdx = 0;
+        while (childIdx < keys.size() && key.compareTo(keys.get(childIdx)) >= 0) { // key >= keys[childIdx]
+            childIdx++;
+        }
+        Optional<Pair<DataBox, Long>> splitChild = getChild(childIdx).put(key, rid);
 
+        // child node is split, add splitKey in current node
+        if (splitChild.isPresent()) {
+            DataBox childSplitKey = splitChild.get().getFirst();
+            long childSplitPageNum = splitChild.get().getSecond();
+            // add current pair to this node
+            int idx = Collections.binarySearch(keys, key);
+            idx = -idx - 1;
+            keys.add(idx, childSplitKey);
+            children.add(idx + 1, childSplitPageNum);
+
+            int order = metadata.getOrder();
+            if (keys.size() <= 2 * order) {
+                // CASE 1: no overflow in innernode
+                sync();
+                return Optional.empty();
+            }
+            // CASE 2: overflow in innernode
+            // create split innernode, move d+1 <key, record> pairs to split node
+            List<DataBox> splitKeys = new ArrayList<>();
+            List<Long> splitChildren = new ArrayList<>();
+            DataBox splitKey = keys.get(order);
+            for (int i = order + 1; i < keys.size(); i++) {
+                splitKeys.add(keys.get(i)); // middle key (i = order) is not copied
+            }
+            keys.subList(order, keys.size()).clear(); // middle key (i = order) is removed
+            for (int i = order + 1; i < children.size(); i++) {
+                splitChildren.add(children.get(i));
+            }
+            children.subList(order + 1, children.size()).clear();
+            InnerNode splitNode = new InnerNode(metadata, bufferManager, splitKeys, splitChildren, treeContext);
+
+            sync();
+            return Optional.of(new Pair<>(splitKey, splitNode.getPage().getPageNum()));
+        }
+
+        // child node is not split
         return Optional.empty();
     }
 

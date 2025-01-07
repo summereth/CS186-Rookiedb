@@ -148,7 +148,7 @@ class LeafNode extends BPlusNode {
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
 
-        return null;
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -156,15 +156,48 @@ class LeafNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         // TODO(proj2): implement
 
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        // check if key already exist. If yes, raise exception
+        if (getKey(key).isPresent()) {
+            throw new BPlusTreeException("Key already exists");
+        }
 
-        return Optional.empty();
+        // add current pair to this node
+        int idx = Collections.binarySearch(keys, key);
+        idx = -idx - 1;
+        keys.add(idx, key);
+        rids.add(idx, rid);
+
+        int order = metadata.getOrder();
+        // CASE 1: no overflow
+        if (keys.size() <= 2 * order) {
+            sync();
+            return Optional.empty();
+        }
+
+        // CASE 2: overflow
+        // create split node, move d+1 <key, record> pairs to split node
+        List<DataBox> splitKeys = new ArrayList<>();
+        List<RecordId> splitRids = new ArrayList<>();
+        for (int i = order; i < keys.size(); i++) {
+            splitKeys.add(keys.get(i));
+            splitRids.add(rids.get(i));
+        }
+        keys.subList(order, keys.size()).clear();
+        rids.subList(order, rids.size()).clear();
+        LeafNode splitNode = new LeafNode(metadata, bufferManager, splitKeys, splitRids, this.rightSibling, treeContext);
+        // modify rightSibling
+        long splitPageNum = splitNode.getPage().getPageNum();
+        this.rightSibling = Optional.of(splitPageNum);
+
+        sync();
+        return Optional.of(new Pair<>(splitKeys.get(0), splitPageNum));
     }
 
     // See BPlusNode.bulkLoad.
