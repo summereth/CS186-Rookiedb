@@ -163,6 +163,11 @@ class LeafNode extends BPlusNode {
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        int order = metadata.getOrder();
+        return insertHelper(key, rid, 2 * order, order);
+    }
+
+    private Optional<Pair<DataBox, Long>> insertHelper(DataBox key, RecordId rid, int capacity, int splitOffset) {
         // check if key already exist. If yes, raise exception
         if (getKey(key).isPresent()) {
             throw new BPlusTreeException("Key already exists");
@@ -174,23 +179,23 @@ class LeafNode extends BPlusNode {
         keys.add(idx, key);
         rids.add(idx, rid);
 
-        int order = metadata.getOrder();
         // CASE 1: no overflow
-        if (keys.size() <= 2 * order) {
+        if (keys.size() <= capacity) {
             sync();
             return Optional.empty();
         }
 
         // CASE 2: overflow
-        // create split node, move d+1 <key, record> pairs to split node
+        // create split node, move <key, record> pairs starting from splitOffset to split node
+        // for the case of single insert (put() method), d+1 pairs are split
         List<DataBox> splitKeys = new ArrayList<>();
         List<RecordId> splitRids = new ArrayList<>();
-        for (int i = order; i < keys.size(); i++) {
+        for (int i = splitOffset; i < keys.size(); i++) {
             splitKeys.add(keys.get(i));
             splitRids.add(rids.get(i));
         }
-        keys.subList(order, keys.size()).clear();
-        rids.subList(order, rids.size()).clear();
+        keys.subList(splitOffset, keys.size()).clear();
+        rids.subList(splitOffset, rids.size()).clear();
         LeafNode splitNode = new LeafNode(metadata, bufferManager, splitKeys, splitRids, this.rightSibling, treeContext);
         // modify rightSibling
         long splitPageNum = splitNode.getPage().getPageNum();
@@ -205,8 +210,14 @@ class LeafNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        int capacity = (int) Math.ceil(2 * metadata.getOrder() * fillFactor);
+        Optional<Pair<DataBox, Long>> loadingResult = Optional.empty();
+        while (data.hasNext() && !loadingResult.isPresent()) {
+            Pair<DataBox, RecordId> record = data.next();
+            loadingResult = insertHelper(record.getFirst(), record.getSecond(), capacity, capacity);
+        }
 
-        return Optional.empty();
+        return loadingResult;
     }
 
     // See BPlusNode.remove.

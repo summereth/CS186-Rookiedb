@@ -269,15 +269,17 @@ public class BPlusTree {
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
         Optional<Pair<DataBox, Long>> splitResult = root.put(key, rid);
-        if (splitResult.isPresent()) {
-            List<DataBox> newKeys = new ArrayList<>();
-            List<Long> newChildren = new ArrayList<>();
-            newKeys.add(splitResult.get().getFirst());
-            newChildren.add(root.getPage().getPageNum());
-            newChildren.add(splitResult.get().getSecond());
-            InnerNode newRoot = new InnerNode(metadata, bufferManager, newKeys, newChildren, lockContext);
-            updateRoot(newRoot);
-        }
+        splitResult.ifPresent(result -> splitRootHelper(result.getFirst(), result.getSecond()));
+    }
+
+    private void splitRootHelper(DataBox splitKey, Long splitPageNum) {
+        List<DataBox> newKeys = new ArrayList<>();
+        List<Long> newChildren = new ArrayList<>();
+        newKeys.add(splitKey);
+        newChildren.add(root.getPage().getPageNum());
+        newChildren.add(splitPageNum);
+        InnerNode newRoot = new InnerNode(metadata, bufferManager, newKeys, newChildren, lockContext);
+        updateRoot(newRoot);
     }
 
     /**
@@ -305,8 +307,10 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
-
-        return;
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> bulkLoadResult = root.bulkLoad(data, fillFactor);
+            bulkLoadResult.ifPresent(result -> splitRootHelper(result.getFirst(), result.getSecond()));
+        }
     }
 
     /**
