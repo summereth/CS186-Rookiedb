@@ -81,10 +81,7 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
-        int idx = 0;
-        while (idx < keys.size() && key.compareTo(keys.get(idx)) >= 0) { // key >= keys[idx]
-            idx++;
-        }
+        int idx = InnerNode.numLessThanEqual(key, keys);
 
         return getChild(idx).get(key);
     }
@@ -102,10 +99,7 @@ class InnerNode extends BPlusNode {
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
-        int childIdx = 0;
-        while (childIdx < keys.size() && key.compareTo(keys.get(childIdx)) >= 0) { // key >= keys[childIdx]
-            childIdx++;
-        }
+        int childIdx = InnerNode.numLessThanEqual(key, keys);
         Optional<Pair<DataBox, Long>> splitChild = getChild(childIdx).put(key, rid);
 
         // child node is split, add splitKey in current node
@@ -160,10 +154,7 @@ class InnerNode extends BPlusNode {
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-        int idx = 0;
-        while (idx < keys.size() && key.compareTo(keys.get(idx)) >= 0) { // key >= keys[idx]
-            idx++;
-        }
+        int idx = InnerNode.numLessThanEqual(key, keys);
         getChild(idx).remove(key);
         sync();
     }
