@@ -81,8 +81,9 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
+        int idx = InnerNode.numLessThanEqual(key, keys);
 
-        return null;
+        return getChild(idx).get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -91,15 +92,60 @@ class InnerNode extends BPlusNode {
         assert(children.size() > 0);
         // TODO(proj2): implement
 
-        return null;
+        return getChild(0).getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        int childIdx = InnerNode.numLessThanEqual(key, keys);
+        Optional<Pair<DataBox, Long>> splitChild = getChild(childIdx).put(key, rid);
 
+        // child node is split, add splitKey in current node
+        if (splitChild.isPresent()) {
+            DataBox childSplitKey = splitChild.get().getFirst();
+            long childSplitPageNum = splitChild.get().getSecond();
+            return insertHelper(childSplitKey, childSplitPageNum);
+        }
+
+        // child node is not split
         return Optional.empty();
+    }
+
+    // update current innernode when child node is split during insertion
+    // return Optional.empty() if current innernode is not full
+    // else return a pair of splitKey and splitPageNum
+    private Optional<Pair<DataBox, Long>> insertHelper(DataBox childSplitKey, Long childSplitPageNum) {
+        // add the pair of childSplit to this node
+        int idx = Collections.binarySearch(keys, childSplitKey);
+        idx = -idx - 1;
+        keys.add(idx, childSplitKey);
+        children.add(idx + 1, childSplitPageNum);
+
+        int order = metadata.getOrder();
+        if (keys.size() <= 2 * order) {
+            // CASE 1: no overflow in innernode
+            sync();
+            return Optional.empty();
+        }
+        // CASE 2: overflow in innernode
+        // create split innernode, move d+1 <key, record> pairs to split node
+        List<DataBox> splitKeys = new ArrayList<>();
+        List<Long> splitChildren = new ArrayList<>();
+        DataBox splitKey = keys.get(order);
+        for (int i = order + 1; i < keys.size(); i++) {
+            splitKeys.add(keys.get(i)); // middle key (i = order) is not copied
+        }
+        keys.subList(order, keys.size()).clear(); // middle key (i = order) is removed
+        for (int i = order + 1; i < children.size(); i++) {
+            splitChildren.add(children.get(i));
+        }
+        children.subList(order + 1, children.size()).clear();
+        InnerNode splitNode = new InnerNode(metadata, bufferManager, splitKeys, splitChildren, treeContext);
+
+        sync();
+        return Optional.of(new Pair<>(splitKey, splitNode.getPage().getPageNum()));
     }
 
     // See BPlusNode.bulkLoad.
@@ -107,6 +153,26 @@ class InnerNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        // repeatedly try to bulk load the rightmost child
+        // until either the inner node is full (in which case it should split)
+        // or there is no more data.
+        while (data.hasNext()) {
+            BPlusNode rightmostChild = getChild(children.size() - 1);
+            Optional<Pair<DataBox, Long>> childLoadingResult = rightmostChild.bulkLoad(data, fillFactor);
+            // rightmost child is split during its bulkLoad
+            // bulk load the new rightmost child in the next loop
+            if (childLoadingResult.isPresent()) {
+                DataBox childSplitKey = childLoadingResult.get().getFirst();
+                Long childSplitPageNum = childLoadingResult.get().getSecond();
+                Optional<Pair<DataBox, Long>> splitCurrentNode = insertHelper(childSplitKey, childSplitPageNum);
+                // check if current innernode is full
+                // if not full, continue to bulk load the rightmost child (new)
+                // if full, split the node and return pair of splitKey and splitPageNum
+                if (splitCurrentNode.isPresent()) {
+                    return splitCurrentNode;
+                }
+            }
+        }
 
         return Optional.empty();
     }
@@ -115,8 +181,9 @@ class InnerNode extends BPlusNode {
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
-        return;
+        int idx = InnerNode.numLessThanEqual(key, keys);
+        getChild(idx).remove(key);
+        sync();
     }
 
     // Helpers /////////////////////////////////////////////////////////////////
