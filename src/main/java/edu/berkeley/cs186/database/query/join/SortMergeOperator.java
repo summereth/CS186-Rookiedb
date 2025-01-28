@@ -152,6 +152,51 @@ public class SortMergeOperator extends JoinOperator {
          */
         private void fetchNextRecord() {
             // TODO(proj3_part1): implement
+            // leftSource and rightSource is already sorted by calling prepareLeft()/Right() in constructor
+
+            if (leftRecord == null) { // see case line 190
+                throw new NoSuchElementException();
+            }
+
+            // CASE 1: no matches under current two pointer
+            if (!this.marked) {
+                while (compare(leftRecord, rightRecord) > 0) {
+                    if (!rightIterator.hasNext()) {
+                        throw new NoSuchElementException();
+                    }
+                    rightRecord = rightIterator.next();
+                }
+                while (compare(leftRecord, rightRecord) < 0) {
+                    if (!leftIterator.hasNext()) {
+                        throw new NoSuchElementException();
+                    }
+                    leftRecord = leftIterator.next();
+                }
+                // find the start of matches
+                this.marked = true;
+                rightIterator.markPrev();
+            }
+            // CASE 2: find matches already, search for pairs between <li, <rj, rj+1, rj+2...>
+            if (compare(leftRecord, rightRecord) == 0) {
+                // CASE 2a: match. rj is still in range -> update nextRecord and advance rightRecord or leftRecord
+                this.nextRecord = leftRecord.concat(rightRecord);
+                if (rightIterator.hasNext()) {
+                    // move to rj+1 is there is any
+                    rightRecord = rightIterator.next();
+                } else {
+                    // else advance li and reset rj
+                    rightIterator.reset();
+                    rightRecord = rightIterator.next();
+                    leftRecord = leftIterator.hasNext() ? leftIterator.next() : null;
+                }
+            } else {
+                // CASE 2b: doesn't match. rj is out of range -> reset rightRecord and advance leftRecord, call fetchNextRecord() again
+                rightIterator.reset();
+                rightRecord = rightIterator.next();
+                leftRecord = leftIterator.hasNext() ? leftIterator.next() : null;
+                this.marked = false; // end of <li, <rj,rj+1,...> search
+                fetchNextRecord();
+            }
         }
 
         @Override
