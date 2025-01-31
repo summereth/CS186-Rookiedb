@@ -506,6 +506,26 @@ public class QueryPlan {
         QueryOperator minOp = new SequentialScanOperator(this.transaction, table);
 
         // TODO(proj3_part2): implement
+        int minCost = minOp.estimateIOCost();
+        int minCostSelectIndex = -1; // for the purpose of excluding index column when applying select, by default -1 will exclude none
+        List<Integer> eligibleIndexColumns = getEligibleIndexColumns(table);
+        for (int selectIdx : eligibleIndexColumns) {
+            SelectPredicate p = this.selectPredicates.get(selectIdx);
+            IndexScanOperator indexScanOp = new IndexScanOperator(transaction, table, p.column, p.operator, p.value);
+            int cost = indexScanOp.estimateIOCost();
+            if (cost < minCost) {
+                minCost = cost;
+                minCostSelectIndex = selectIdx;
+                minOp = indexScanOp;
+            }
+        }
+        // Apply selection on eligible columns
+        minOp = addEligibleSelections(minOp, minCostSelectIndex);
+        // minCostSelectIndex() doesn't modify minOp QueryOperator directly, it returns a new QueryOperator
+        // minOp.getSource() returns the ScanOperator (if only one select applied)
+        // that's why QueryPlan generates QueryOperator DAG
+        // For example, finalOperator -> (eg)selectOperator -> scanOperator
+
         return minOp;
     }
 
