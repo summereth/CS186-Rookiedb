@@ -591,6 +591,37 @@ public class QueryPlan {
         //      Using the operator from Case 1 or 2, use minCostJoinType to
         //      calculate the cheapest join with the new table and the
         //      previously joined tables. Then, update the result map if needed.
+        for (Set<String> prevTables : prevMap.keySet()) {
+            QueryOperator leftOp = prevMap.get(prevTables);
+
+            for (JoinPredicate jp : joinPredicates) {
+                if (prevTables.contains(jp.leftTable) && prevTables.contains(jp.rightTable)
+                         || !prevTables.contains(jp.leftTable) && !prevTables.contains(jp.rightTable)) {
+                    continue;
+                }
+
+                QueryOperator rightOp;
+                String leftColumn;
+                String rightColumn;
+                Set<String> currTables = new HashSet<>(prevTables);
+                if (prevTables.contains(jp.leftTable)) {
+                    rightOp = pass1Map.get(Set.of(jp.rightTable));
+                    leftColumn = jp.leftColumn;
+                    rightColumn = jp.rightColumn;
+                    currTables.add(jp.rightTable);
+                } else {
+                    rightOp = pass1Map.get(Set.of(jp.leftTable));
+                    leftColumn = jp.rightColumn;
+                    rightColumn = jp.leftColumn;
+                    currTables.add(jp.leftTable);
+                }
+                QueryOperator joinOp = minCostJoinType(leftOp, rightOp, leftColumn, rightColumn);
+                if (!result.containsKey(currTables)
+                        || result.get(currTables).estimateIOCost() > joinOp.estimateIOCost()) {
+                    result.put(currTables, joinOp);
+                }
+            }
+        }
         return result;
     }
 
