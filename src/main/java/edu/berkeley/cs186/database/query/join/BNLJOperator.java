@@ -77,26 +77,41 @@ public class BNLJOperator extends JoinOperator {
          * Fetch the next block of records from the left source.
          * leftBlockIterator should be set to a backtracking iterator over up to
          * B-2 pages of records from the left source, and leftRecord should be
-         * set to the first record in this block.
+         * set to the first record in this block. The first record in this block
+         * should be marked.
          *
          * If there are no more records in the left source, this method should
          * do nothing.
          */
         private void fetchNextLeftBlock() {
             // TODO(proj3_part1): implement
+            // also move leftSourceIterator?
+            if (!leftSourceIterator.hasNext()) {
+                return;
+            }
+            leftBlockIterator = QueryOperator.getBlockIterator(leftSourceIterator, getLeftSource().getSchema(), numBuffers - 2);
+            leftBlockIterator.markNext();
+            this.leftRecord = leftBlockIterator.next();
         }
 
         /**
          * Fetch the next page of records from the right source.
          * rightPageIterator should be set to a backtracking iterator over up to
-         * one page of records from the left source, and leftRecord
-         * should be set to the first record in this block.
+         * one page of records from the right source. The first record in this
+         * page should be marked.
          *
          * If there are no more records in the right source, this method should
          * do nothing.
          */
         private void fetchNextRightPage() {
             // TODO(proj3_part1): implement
+            if (!rightSourceIterator.hasNext()) {
+                return;
+            }
+            // getBlockIterator() internally moves rightSourceIterator to read records of maxPages,
+            // and returns an iterator of those records
+            rightPageIterator = QueryOperator.getBlockIterator(rightSourceIterator, getRightSource().getSchema(), 1);
+            rightPageIterator.markNext();
         }
 
         /**
@@ -105,7 +120,34 @@ public class BNLJOperator extends JoinOperator {
          */
         private Record fetchNextRecord() {
             // TODO(proj3_part1): implement
-            return null;
+//            Case 1: The right page iterator has a value to yield -> yield rightPageIterator.next() and compare
+//            Case 2: The right page iterator doesn't have a value to yield but the left block iterator does
+//                    -> a. advance leftRecord to leftBlockIterator.next(); b. reset rightPageIterator; c. continue loop
+//            Case 3: Neither the right page nor left block iterators have values to yield, but there's more right pages
+//                    -> a. call fetchNextRightPage(); b. reset leftBlockIterator and leftRecord; c. continue loop
+//            Case 4: Neither right page nor left block iterators have values nor are there more right pages, but there are still left blocks
+//                    -> a. call fetchNextLeftBlock() ; b. reset rightSourceIterator and call fetchNextRightPage(); c. continue loop
+            while (true) {
+                if (rightPageIterator.hasNext()) {
+                    Record rightRecord = rightPageIterator.next();
+                    if (compare(this.leftRecord, rightRecord) == 0) {
+                        return this.leftRecord.concat(rightRecord);
+                    }
+                } else if (leftBlockIterator.hasNext()) {
+                    this.leftRecord = leftBlockIterator.next();
+                    rightPageIterator.reset();
+                } else if (rightSourceIterator.hasNext()) {
+                    fetchNextRightPage();
+                    leftBlockIterator.reset();
+                    this.leftRecord = leftBlockIterator.next();
+                } else if (leftSourceIterator.hasNext()){
+                    fetchNextLeftBlock();
+                    rightSourceIterator.reset();
+                    fetchNextRightPage();
+                } else {
+                    return null;
+                }
+            }
         }
 
         /**
