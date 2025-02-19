@@ -305,7 +305,7 @@ public class Table implements BacktrackingIterable<Record> {
         // its on.
         LockContext pageContext = lockContext.childContext(rid.getPageNum());
         // TODO(proj4_part2): Update the following line
-        LockUtil.ensureSufficientLockHeld(pageContext, LockType.NL);
+        LockUtil.ensureSufficientLockHeld(pageContext, LockType.X);
 
         Record newRecord = schema.verify(updated);
         Record oldRecord = getRecord(rid);
@@ -332,7 +332,7 @@ public class Table implements BacktrackingIterable<Record> {
         LockContext pageContext = lockContext.childContext(rid.getPageNum());
 
         // TODO(proj4_part2): Update the following line
-        LockUtil.ensureSufficientLockHeld(pageContext, LockType.NL);
+        LockUtil.ensureSufficientLockHeld(pageContext, LockType.X);
 
         Page page = fetchPage(rid.getPageNum());
         try {
