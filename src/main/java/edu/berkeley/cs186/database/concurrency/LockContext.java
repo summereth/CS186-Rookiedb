@@ -100,10 +100,7 @@ public class LockContext {
 
         lockman.acquire(transaction, name, lockType);
         if (parentContext() != null) {
-            parentContext().numChildLocks.put(
-                    transaction.getTransNum(),
-                    parentContext().numChildLocks.getOrDefault(transaction.getTransNum(), 0) + 1
-            );
+            parentContext().updateNumChildLocks(transaction, 1);
         }
     }
 
@@ -130,11 +127,7 @@ public class LockContext {
 
         lockman.release(transaction, name);
         if (parentContext() != null) {
-            assert parentContext().numChildLocks.containsKey(transaction.getTransNum());
-            parentContext().numChildLocks.put(
-                    transaction.getTransNum(),
-                    parentContext().numChildLocks.get(transaction.getTransNum()) - 1
-            );
+            parentContext().updateNumChildLocks(transaction, -1);
         }
     }
 
@@ -169,7 +162,11 @@ public class LockContext {
             if (hasSIXAncestor(transaction)) {
                 throw new InvalidLockException("Request invalid: already has SIX lock on ancestor");
             }
+
             List<ResourceName> releaseName = new ArrayList<>(sisDescendants(transaction));
+            // update numChildLocks for all releaseName
+            updateNumChildLocks(transaction, -1, releaseName);
+
             releaseName.add(this.name);
             lockman.acquireAndRelease(transaction, this.name, newLockType, releaseName);
         } else {
@@ -225,7 +222,6 @@ public class LockContext {
         }
         LockType escalatedLockType = LockType.substitutable(LockType.S, currentLockType) ? LockType.S : LockType.X;
         List<ResourceName> releaseNames = new ArrayList<>();
-        releaseNames.add(this.name);
         for (Long childName : children.keySet()) {
             LockContext child = childContext(childName);
             LockType childLockType = child.lockman.getLockType(transaction, child.name);
@@ -236,7 +232,9 @@ public class LockContext {
                 }
             }
         }
-        numChildLocks.put(transaction.getTransNum(), 0);
+        // update numChildLocks for all resource in releaseNames
+        updateNumChildLocks(transaction, -1, releaseNames);
+        releaseNames.add(this.name);
         lockman.acquireAndRelease(transaction, this.name, escalatedLockType, releaseNames);
     }
 
@@ -392,6 +390,29 @@ public class LockContext {
      */
     public int getNumChildren(TransactionContext transaction) {
         return numChildLocks.getOrDefault(transaction.getTransNum(), 0);
+    }
+
+    // update numChildLocks with given delta recursively for all ancestors
+    private void updateNumChildLocks(TransactionContext transaction, int delta) {
+        numChildLocks.put(
+                transaction.getTransNum(),
+                numChildLocks.getOrDefault(transaction.getTransNum(), 0) + delta
+        );
+        LockContext parent = parentContext();
+        if (parent != null) {
+            parent.updateNumChildLocks(transaction, delta);
+        }
+    }
+
+    // update numChildLocks with given delta recursively for all ancestors of given resources
+    // numChildLocks of resource itself won't be updated
+    private void updateNumChildLocks(TransactionContext transaction, int delta, List<ResourceName> resources) {
+        for (ResourceName resource : resources) {
+            LockContext parent = LockContext.fromResourceName(lockman, resource).parentContext();
+            if (parent != null) {
+                parent.updateNumChildLocks(transaction, delta);
+            }
+        }
     }
 
     @Override

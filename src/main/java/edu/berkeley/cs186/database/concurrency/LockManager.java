@@ -81,11 +81,20 @@ public class LockManager {
          */
         public void grantOrUpdateLock(Lock lock) {
             // TODO(proj4_part1): implement
-            // check if the transaction already has a lock on this resource
+            // update locks on resource
             locks.removeIf(existingLock -> Objects.equals(existingLock.transactionNum, lock.transactionNum));
             locks.add(lock);
-            transactionLocks.putIfAbsent(lock.transactionNum, new ArrayList<>());
-            transactionLocks.get(lock.transactionNum).add(lock);
+            // update locks on transaction
+            List<Lock> locksOnXact = transactionLocks.computeIfAbsent(lock.transactionNum, k -> new ArrayList<>());
+            boolean existLockOnResource = false;
+            // if there's existing lock owned by xact on resource, update it
+            for (int i = 0; i < locksOnXact.size(); i++) {
+                if (locksOnXact.get(i).name == lock.name) {
+                    locksOnXact.set(i, lock);
+                    existLockOnResource = true;
+                }
+            }
+            if (!existLockOnResource) locksOnXact.add(lock);
         }
 
         /**
