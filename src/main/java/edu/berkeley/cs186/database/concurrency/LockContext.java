@@ -169,11 +169,12 @@ public class LockContext {
             if (hasSIXAncestor(transaction)) {
                 throw new InvalidLockException("Request invalid: already has SIX lock on ancestor");
             }
-            for (ResourceName sisChild : sisDescendants(transaction)) {
-                lockman.release(transaction, sisChild);
-            }
+            List<ResourceName> releaseName = new ArrayList<>(sisDescendants(transaction));
+            releaseName.add(this.name);
+            lockman.acquireAndRelease(transaction, this.name, newLockType, releaseName);
+        } else {
+            lockman.promote(transaction, this.name, newLockType);
         }
-        lockman.promote(transaction, this.name, newLockType);
     }
 
     /**
@@ -223,19 +224,20 @@ public class LockContext {
             return;
         }
         LockType escalatedLockType = LockType.substitutable(LockType.S, currentLockType) ? LockType.S : LockType.X;
-        List<ResourceName> descendantsWithLocks = new ArrayList<>();
+        List<ResourceName> releaseNames = new ArrayList<>();
+        releaseNames.add(this.name);
         for (Long childName : children.keySet()) {
             LockContext child = childContext(childName);
             LockType childLockType = child.lockman.getLockType(transaction, child.name);
             if (childLockType != LockType.NL) {
-                descendantsWithLocks.add(child.name);
+                releaseNames.add(child.name);
                 if (!LockType.substitutable(escalatedLockType, childLockType)) {
                     escalatedLockType = LockType.X;
                 }
             }
         }
         numChildLocks.put(transaction.getTransNum(), 0);
-        lockman.acquireAndRelease(transaction, this.name, escalatedLockType, descendantsWithLocks);
+        lockman.acquireAndRelease(transaction, this.name, escalatedLockType, releaseNames);
     }
 
     /**
