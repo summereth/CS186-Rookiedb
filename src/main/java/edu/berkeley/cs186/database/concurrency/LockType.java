@@ -19,6 +19,18 @@ public enum LockType {
             throw new NullPointerException("null lock type");
         }
         // TODO(proj4_part1): implement
+        if (a == NL || b == NL) {
+            return true;
+        }
+        if (a == X || b == X) {
+            return false;
+        }
+        if (a == IS || b == IS) {
+            return true;
+        }
+        if (a == IX && b == IX || a == S && b == S) {
+            return true;
+        }
 
         return false;
     }
@@ -45,12 +57,27 @@ public enum LockType {
     /**
      * This method returns if parentLockType has permissions to grant a childLockType
      * on a child.
+     *
+     * S(A) can read A and all descendants of A.
+     * X(A) can read and write A and all descendants of A.
+     * IS(A) can request shared and intent-shared locks on all children of A.
+     * IX(A) can request any lock on all children of A.
+     * SIX(A) can do anything that having S(A) or IX(A) lets it do, except requesting S, IS, or SIX** locks on children of A, which would be redundant.
      */
     public static boolean canBeParentLock(LockType parentLockType, LockType childLockType) {
         if (parentLockType == null || childLockType == null) {
             throw new NullPointerException("null lock type");
         }
         // TODO(proj4_part1): implement
+        if (childLockType == NL) return true;
+        switch (parentLockType) {
+            case NL: return false;
+            case S: return childLockType == S;
+            case X: return childLockType == X;
+            case IS: return childLockType == IS || childLockType == S;
+            case IX: return true;
+            case SIX: return childLockType != S && childLockType != IS && childLockType != SIX;
+        }
 
         return false;
     }
@@ -66,6 +93,17 @@ public enum LockType {
             throw new NullPointerException("null lock type");
         }
         // TODO(proj4_part1): implement
+        if (required == NL) return true;
+        if (substitute == NL) return false;
+        if (required == substitute) return true;
+        if (substitute == X) return true;
+        switch (substitute) {
+            case S:
+            case IX:
+                return required == IS;
+            case IS: return false;
+            case SIX: return required != X;
+        }
 
         return false;
     }

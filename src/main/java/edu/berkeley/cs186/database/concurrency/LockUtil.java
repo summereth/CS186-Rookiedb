@@ -1,6 +1,7 @@
 package edu.berkeley.cs186.database.concurrency;
 
 import edu.berkeley.cs186.database.TransactionContext;
+import java.util.*;
 
 /**
  * LockUtil is a declarative layer which simplifies multigranularity lock
@@ -18,10 +19,10 @@ public class LockUtil {
      * This method should promote/escalate/acquire as needed, but should only
      * grant the least permissive set of locks needed. We recommend that you
      * think about what to do in each of the following cases:
-     * - The current lock type can effectively substitute the requested type
-     * - The current lock type is IX and the requested lock is S
-     * - The current lock type is an intent lock
-     * - None of the above
+     * - The current lock type can effectively substitute the requested type -> do nothing
+     * - The current lock type is IX and the requested lock is S -> promote to SIX
+     * - The current lock type is an intent lock -> acquire requested lock by escalating and promoting
+     * - None of the above -> acquire requested lock by promoting
      *
      * You may find it useful to create a helper method that ensures you have
      * the appropriate locks on all ancestors.
@@ -40,8 +41,40 @@ public class LockUtil {
         LockType explicitLockType = lockContext.getExplicitLockType(transaction);
 
         // TODO(proj4_part2): implement
-        return;
+        if (LockType.substitutable(effectiveLockType, requestType)) {
+            return; // The current lock type can effectively substitute the requested type -> do nothing
+        }
+
+        // Step 1: ensure we have the appropriate locks on ancestors
+        ensureAncestorLockHeld(transaction, parentContext, requestType);
+
+        // Step 2: acquire the lock on the resource
+        if (explicitLockType.equals(LockType.IX) && requestType.equals(LockType.S)) {
+            lockContext.promote(transaction, LockType.SIX);
+        } else if (explicitLockType.isIntent()) {
+            lockContext.escalate(transaction);
+            if (!LockType.substitutable(lockContext.getExplicitLockType(transaction), requestType)) {
+                lockContext.promote(transaction, requestType);
+            }
+        } else if (explicitLockType.equals(LockType.NL)) {
+            lockContext.acquire(transaction, requestType);
+        } else {
+            lockContext.promote(transaction, requestType);
+        }
     }
 
     // TODO(proj4_part2) add any helper methods you want
+    private static void ensureAncestorLockHeld(TransactionContext transaction, LockContext parentContext, LockType childRequestType) {
+        if (childRequestType.equals(LockType.NL) || parentContext == null) return;
+        ensureAncestorLockHeld(transaction, parentContext.parentContext(), childRequestType);
+
+        Map<LockType, LockType> intentLockMap = Map.of(LockType.S, LockType.IS, LockType.X, LockType.IX);
+        if (parentContext.getExplicitLockType(transaction) == LockType.NL) {
+            parentContext.acquire(transaction, intentLockMap.get(childRequestType));
+        } else if (!LockType.substitutable(
+                parentContext.getExplicitLockType(transaction),
+                intentLockMap.get(childRequestType))) {
+            parentContext.promote(transaction, intentLockMap.get(childRequestType));
+        }
+    }
 }
