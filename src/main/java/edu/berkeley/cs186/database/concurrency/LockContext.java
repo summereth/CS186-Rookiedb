@@ -222,12 +222,11 @@ public class LockContext {
         }
         LockType escalatedLockType = LockType.substitutable(LockType.S, currentLockType) ? LockType.S : LockType.X;
         List<ResourceName> releaseNames = new ArrayList<>();
-        for (Long childName : children.keySet()) {
-            LockContext child = childContext(childName);
-            LockType childLockType = child.lockman.getLockType(transaction, child.name);
-            if (childLockType != LockType.NL) {
-                releaseNames.add(child.name);
-                if (!LockType.substitutable(escalatedLockType, childLockType)) {
+        List<Lock> locksOwnedByXact = lockman.getLocks(transaction);
+        for (Lock lock : locksOwnedByXact) {
+            if (lock.name.isDescendantOf(this.name)) {
+                releaseNames.add(lock.name);
+                if (!LockType.substitutable(escalatedLockType, lock.lockType)) {
                     escalatedLockType = LockType.X;
                 }
             }
@@ -297,11 +296,10 @@ public class LockContext {
     private List<ResourceName> sisDescendants(TransactionContext transaction) {
         // TODO(proj4_part2): implement
         List<ResourceName> sisDescendants = new ArrayList<>();
-        for (long child : children.keySet()) {
-            LockContext childContext = childContext(child);
-            LockType childLockType = lockman.getLockType(transaction, childContext.name);
-            if (childLockType == LockType.IS || childLockType == LockType.S) {
-                sisDescendants.add(childContext.name);
+        for (Lock lock : lockman.getLocks(transaction)) {
+            if (lock.name.isDescendantOf(this.name)
+                    && (lock.lockType == LockType.IS || lock.lockType == LockType.S)) {
+                sisDescendants.add(lock.name);
             }
         }
         return sisDescendants;
