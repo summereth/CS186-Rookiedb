@@ -112,7 +112,16 @@ public class ARIESRecoveryManager implements RecoveryManager {
     @Override
     public long commit(long transNum) {
         // TODO(proj5_part1): implement
-        return -1L;
+        TransactionTableEntry xactEntry = transactionTable.get(transNum);
+        // append commit record and flush logs
+        CommitTransactionLogRecord logRecord = new CommitTransactionLogRecord(transNum, xactEntry.lastLSN);
+        long commitLSN = logManager.appendToLog(logRecord);
+        logManager.flushToLSN(commitLSN);
+        // update xact table
+        xactEntry.lastLSN = commitLSN;
+        xactEntry.transaction.setStatus(Transaction.Status.COMMITTING);
+
+        return commitLSN;
     }
 
     /**
@@ -128,7 +137,15 @@ public class ARIESRecoveryManager implements RecoveryManager {
     @Override
     public long abort(long transNum) {
         // TODO(proj5_part1): implement
-        return -1L;
+        TransactionTableEntry xactEntry = transactionTable.get(transNum);
+        // append abort record
+        AbortTransactionLogRecord logRecord = new AbortTransactionLogRecord(transNum, xactEntry.lastLSN);
+        long abortLSN = logManager.appendToLog(logRecord);
+        // update xact table
+        xactEntry.lastLSN = abortLSN;
+        xactEntry.transaction.setStatus(Transaction.Status.ABORTING);
+
+        return abortLSN;
     }
 
     /**
@@ -145,7 +162,18 @@ public class ARIESRecoveryManager implements RecoveryManager {
     @Override
     public long end(long transNum) {
         // TODO(proj5_part1): implement
-        return -1L;
+        TransactionTableEntry xactEntry = transactionTable.get(transNum);
+        if (xactEntry.transaction.getStatus() == Transaction.Status.ABORTING) {
+            rollbackToLSN(transNum, 0); // roll back to the beginning of the xact
+        }
+        // remove xact from the xact table
+        transactionTable.remove(transNum);
+        // append end log
+        EndTransactionLogRecord logRecord = new EndTransactionLogRecord(transNum, xactEntry.lastLSN);
+        long endLSN = logManager.appendToLog(logRecord);
+        // update xact status
+        xactEntry.transaction.setStatus(Transaction.Status.COMPLETE);
+        return endLSN;
     }
 
     /**
@@ -179,6 +207,34 @@ public class ARIESRecoveryManager implements RecoveryManager {
         // back from the next record that hasn't yet been undone.
         long currentLSN = lastRecord.getUndoNextLSN().orElse(lastRecordLSN);
         // TODO(proj5_part1) implement the rollback logic described above
+        while (currentLSN > LSN) {
+            LogRecord logRecord = logManager.fetchLogRecord(currentLSN);
+            if (logRecord.isUndoable()) {
+                // write CLR and flush if necessary
+                Pair<LogRecord, Boolean> undoRes = logRecord.undo(transactionEntry.lastLSN);
+                long undoLSN = logManager.appendToLog(undoRes.getFirst());
+                if (undoRes.getSecond()) {
+                    logManager.flushToLSN(undoLSN);
+                }
+                // update lastLSN in xact table
+                transactionEntry.lastLSN = undoLSN;
+                // update DPT if necessary
+                if (logRecord.getType() == LogType.UPDATE_PAGE) {
+                    dirtyPageTable.put(logRecord.getPageNum().get(), undoLSN);
+                }
+                if (logRecord.getType() == LogType.ALLOC_PAGE
+                        && dirtyPageTable.containsKey(logRecord.getPageNum().get())
+                        && dirtyPageTable.get(logRecord.getPageNum().get()) == currentLSN) {
+                    dirtyPageTable.remove(logRecord.getPageNum().get());
+                }
+                // perform undo
+                undoRes.getFirst().redo(diskSpaceManager, bufferManager);
+
+                currentLSN = undoRes.getFirst().getUndoNextLSN().orElse(-1L);
+            } else {
+                currentLSN = logRecord.getPrevLSN().orElse(-1L);
+            }
+        }
     }
 
     /**
