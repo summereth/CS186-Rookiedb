@@ -511,7 +511,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
         long LSN = transactionEntry.getSavepoint(name);
 
         // TODO(proj5_part1): implement
-        return;
+        rollbackToLSN(transNum, LSN);
     }
 
     /**
