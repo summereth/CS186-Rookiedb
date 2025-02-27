@@ -220,7 +220,8 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 transactionEntry.lastLSN = undoLSN;
                 // update DPT if necessary
                 if (logRecord.getType() == LogType.UPDATE_PAGE) {
-                    dirtyPageTable.put(logRecord.getPageNum().get(), undoLSN);
+                    assert logRecord.getPageNum().isPresent();
+                    dirtyPageTable.putIfAbsent(logRecord.getPageNum().get(), undoLSN);
                 }
                 if (logRecord.getType() == LogType.ALLOC_PAGE
                         && dirtyPageTable.containsKey(logRecord.getPageNum().get())
@@ -231,6 +232,12 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 undoRes.getFirst().redo(diskSpaceManager, bufferManager);
 
                 currentLSN = undoRes.getFirst().getUndoNextLSN().orElse(-1L);
+
+                // For testing
+                System.out.println("XACT Table: " + transactionEntry);
+                if (logRecord.getPageNum().isPresent()) {
+                    System.out.println("DPT: { pageNum: " + logRecord.getPageNum().get() + ", recLSN: " + dirtyPageTable.getOrDefault(logRecord.getPageNum().get(), -1L) + " }");
+                }
             } else {
                 currentLSN = logRecord.getPrevLSN().orElse(-1L);
             }
@@ -288,7 +295,34 @@ public class ARIESRecoveryManager implements RecoveryManager {
         assert (before.length == after.length);
 
         // TODO(proj5_part1): implement
-        return -1L;
+        assert pageNum != 0; // This method is never called on a log page
+        assert transactionTable.containsKey(transNum);
+        TransactionTableEntry xactEntry = transactionTable.get(transNum);
+
+        // check if the log can be written in one page
+        if (after.length > BufferManager.EFFECTIVE_PAGE_SIZE / 2) {
+            // break the log into 2 logs
+            LogRecord undoOnly = new UpdatePageLogRecord(transNum, pageNum, xactEntry.lastLSN, pageOffset, before, null);
+            long undoLSN = logManager.appendToLog(undoOnly);
+            LogRecord redoOnly = new UpdatePageLogRecord(transNum, pageNum, undoLSN, pageOffset, null, after);
+            xactEntry.lastLSN = logManager.appendToLog(redoOnly);
+            if (!dirtyPageTable.containsKey(pageNum)) {
+                dirtyPageTable.put(pageNum, undoLSN);
+            }
+        } else {
+            LogRecord logRecord = new UpdatePageLogRecord(transNum, pageNum, xactEntry.lastLSN, pageOffset, before, after);
+            xactEntry.lastLSN = logManager.appendToLog(logRecord);
+            if (!dirtyPageTable.containsKey(pageNum)) {
+                dirtyPageTable.put(pageNum, xactEntry.lastLSN);
+            }
+        }
+        xactEntry.touchedPages.add(pageNum);
+
+        // For testing
+        System.out.println("XACT Table: " + xactEntry);
+        System.out.println("DPT: { pageNum: " + pageNum + ", recLSN: " + dirtyPageTable.getOrDefault(pageNum, -1L) + " }");
+
+        return xactEntry.lastLSN;
     }
 
     /**
