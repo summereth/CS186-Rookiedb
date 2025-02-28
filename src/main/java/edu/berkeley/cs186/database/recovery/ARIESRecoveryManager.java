@@ -8,7 +8,6 @@ import edu.berkeley.cs186.database.concurrency.LockType;
 import edu.berkeley.cs186.database.concurrency.LockUtil;
 import edu.berkeley.cs186.database.io.DiskSpaceManager;
 import edu.berkeley.cs186.database.memory.BufferManager;
-import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.recovery.records.*;
 
 import java.util.*;
@@ -234,10 +233,10 @@ public class ARIESRecoveryManager implements RecoveryManager {
                 currentLSN = undoRes.getFirst().getUndoNextLSN().orElse(-1L);
 
                 // For testing
-                System.out.println("XACT Table: " + transactionEntry);
-                if (logRecord.getPageNum().isPresent()) {
-                    System.out.println("DPT: { pageNum: " + logRecord.getPageNum().get() + ", recLSN: " + dirtyPageTable.getOrDefault(logRecord.getPageNum().get(), -1L) + " }");
-                }
+//                System.out.println("XACT Table: " + transactionEntry);
+//                if (logRecord.getPageNum().isPresent()) {
+//                    System.out.println("DPT: { pageNum: " + logRecord.getPageNum().get() + ", recLSN: " + dirtyPageTable.getOrDefault(logRecord.getPageNum().get(), -1L) + " }");
+//                }
             } else {
                 currentLSN = logRecord.getPrevLSN().orElse(-1L);
             }
@@ -319,8 +318,8 @@ public class ARIESRecoveryManager implements RecoveryManager {
         xactEntry.touchedPages.add(pageNum);
 
         // For testing
-        System.out.println("XACT Table: " + xactEntry);
-        System.out.println("DPT: { pageNum: " + pageNum + ", recLSN: " + dirtyPageTable.getOrDefault(pageNum, -1L) + " }");
+//        System.out.println("XACT Table: " + xactEntry);
+//        System.out.println("DPT: { pageNum: " + pageNum + ", recLSN: " + dirtyPageTable.getOrDefault(pageNum, -1L) + " }");
 
         return xactEntry.lastLSN;
     }
@@ -533,44 +532,58 @@ public class ARIESRecoveryManager implements RecoveryManager {
         LogRecord beginRecord = new BeginCheckpointLogRecord(getTransactionCounter.get());
         long beginLSN = logManager.appendToLog(beginRecord);
 
-        Map<Long, Long> dpt = new HashMap<>();
-        Map<Long, Pair<Transaction.Status, Long>> txnTable = new HashMap<>();
-        Map<Long, List<Long>> touchedPages = new HashMap<>();
-        int numTouchedPages = 0;
+        Map<Long, Long> chkptDPT = new HashMap<>();
+        Map<Long, Pair<Transaction.Status, Long>> chkptTxnTable = new HashMap<>();
+        Map<Long, List<Long>> chkptTouchedPages = new HashMap<>();
 
         // TODO(proj5_part1): generate end checkpoint record(s) for DPT and transaction table
+        List<Long> dirtyPages = new ArrayList<>(dirtyPageTable.keySet());
+        List<Long> transactions = new ArrayList<>(transactionTable.keySet());
+        int dirtyPageIdx = 0, txnIdx = 0;
 
-        for (Map.Entry<Long, TransactionTableEntry> entry : transactionTable.entrySet()) {
-            long transNum = entry.getKey();
-            for (long pageNum : entry.getValue().touchedPages) {
-                boolean fitsAfterAdd;
-                if (!touchedPages.containsKey(transNum)) {
-                    fitsAfterAdd = EndCheckpointLogRecord.fitsInOneRecord(
-                                       dpt.size(), txnTable.size(), touchedPages.size() + 1, numTouchedPages + 1);
-                } else {
-                    fitsAfterAdd = EndCheckpointLogRecord.fitsInOneRecord(
-                                       dpt.size(), txnTable.size(), touchedPages.size(), numTouchedPages + 1);
-                }
-
-                if (!fitsAfterAdd) {
-                    LogRecord endRecord = new EndCheckpointLogRecord(dpt, txnTable, touchedPages);
-                    logManager.appendToLog(endRecord);
-
-                    dpt.clear();
-                    txnTable.clear();
-                    touchedPages.clear();
-                    numTouchedPages = 0;
-                }
-
-                touchedPages.computeIfAbsent(transNum, t -> new ArrayList<>());
-                touchedPages.get(transNum).add(pageNum);
-                ++numTouchedPages;
-            }
+        if (dirtyPages.isEmpty() && transactions.isEmpty()) {
+            EndCheckpointLogRecord logRecord = new EndCheckpointLogRecord(chkptDPT, chkptTxnTable, chkptTouchedPages);
+            logManager.appendToLog(logRecord);
+            // Ensure checkpoint is fully flushed before updating the master record
+            logManager.flushToLSN(logRecord.getLSN());
+            return;
         }
 
-        // Last end checkpoint record
-        LogRecord endRecord = new EndCheckpointLogRecord(dpt, txnTable, touchedPages);
-        logManager.appendToLog(endRecord);
+        while (dirtyPageIdx < dirtyPages.size() || txnIdx < transactions.size()) {
+
+            // First, iterate through the dirtyPageTable and copy the entries.
+            // Stop if the current record would cause the end checkpoint record to be too large.
+            while (dirtyPageIdx < dirtyPages.size() && EndCheckpointLogRecord.fitsInOneRecord(dirtyPageIdx + 1, 0, 0, 0)) {
+                chkptDPT.put(dirtyPages.get(dirtyPageIdx), dirtyPageTable.get(dirtyPages.get(dirtyPageIdx)));
+                dirtyPageIdx++;
+            }
+
+            // Then, iterate through transactionTable
+            int numTouchedPages = 0;
+            if (txnIdx < transactions.size()) numTouchedPages = transactionTable.get(transactions.get(txnIdx)).touchedPages.size();
+            while (txnIdx < transactions.size()
+                    && EndCheckpointLogRecord.fitsInOneRecord(chkptDPT.size(), txnIdx + 1, txnIdx + 1, numTouchedPages)) {
+
+                long transNum = transactions.get(txnIdx);
+                TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+                chkptTxnTable.put(transNum,
+                        new Pair<>(transactionEntry.transaction.getStatus(), transactionEntry.lastLSN));
+                chkptTouchedPages.put(transNum, new ArrayList<>());
+                for (long touchedPage : transactionEntry.touchedPages) {
+                    chkptTouchedPages.get(transNum).add(touchedPage);
+                }
+
+                txnIdx++;
+                if (txnIdx < transactions.size()) numTouchedPages += transactionTable.get(transactions.get(txnIdx)).touchedPages.size();
+            }
+            EndCheckpointLogRecord logRecord = new EndCheckpointLogRecord(chkptDPT, chkptTxnTable, chkptTouchedPages);
+            logManager.appendToLog(logRecord);
+            // Ensure checkpoint is fully flushed before updating the master record
+            logManager.flushToLSN(logRecord.getLSN());
+            chkptDPT.clear();
+            chkptTxnTable.clear();
+            chkptTouchedPages.clear();
+        }
 
         // Update master record
         MasterLogRecord masterRecord = new MasterLogRecord(beginLSN);
