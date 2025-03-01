@@ -624,6 +624,81 @@ public class ARIESRecoveryManager implements RecoveryManager {
         };
     }
 
+    private void endingTransactionsAfterAnalysis() {
+        for (Map.Entry<Long, TransactionTableEntry> entry : transactionTable.entrySet()) {
+            long transNum = entry.getKey();
+            TransactionTableEntry transactionEntry = entry.getValue();
+            if (transactionEntry.transaction.getStatus() == Transaction.Status.COMMITTING) {
+                // all transactions in the COMMITTING state should be ended (cleanup(), state set to COMPLETE, end
+                // transaction record written, and removed from the transaction table).
+                transactionEntry.transaction.cleanup();
+                end(transNum);
+            } else if (transactionEntry.transaction.getStatus() == Transaction.Status.RUNNING) {
+                // all transactions in the RUNNING state should be moved into the RECOVERY_ABORTING state, and an
+                // abort transaction record should be written.
+                abort(transNum);
+                transactionEntry.transaction.setStatus(Transaction.Status.RECOVERY_ABORTING);
+            } else if (transactionEntry.transaction.getStatus() == Transaction.Status.COMPLETE) {
+                transactionTable.remove(transNum);
+            }
+        }
+    }
+
+    private void analyzePageOperationRelatedLog(LogRecord logRecord, TransactionTableEntry transactionEntry) {
+        long pageNum = logRecord.getPageNum().get();
+        // Add to touchedPages
+        transactionEntry.touchedPages.add(pageNum);
+        // Acquire X lock
+        acquireTransactionLock(transactionEntry.transaction, getPageLockContext(pageNum), LockType.X);
+        // Update DPT
+        if (logRecord.getType() == LogType.UPDATE_PAGE || logRecord.getType() == LogType.UNDO_UPDATE_PAGE) {
+            // UpdatePage/UndoUpdatePage both may dirty a page in memory, without flushing changes to disk.
+            if (!dirtyPageTable.containsKey(pageNum)) {
+                dirtyPageTable.put(pageNum, logRecord.getLSN());
+            }
+        } else if (logRecord.getType() == LogType.FREE_PAGE || logRecord.getType() == LogType.UNDO_ALLOC_PAGE) {
+            // FreePage/UndoAllocPage both make their changes visible on disk immediately, and can be seen
+            // as flushing the freed page to disk (remove page from DPT)
+            dirtyPageTable.remove(pageNum);
+        }
+        // No need to update DPT for AllocPage/UndoFreePage
+    }
+
+    private void analyzeEndCheckPointLog(EndCheckpointLogRecord logRecord) {
+        Map<Long, Long> chkptDPT = logRecord.getDirtyPageTable();
+        Map<Long, Pair<Transaction. Status, Long>> chkptTxnTable = logRecord.getTransactionTable();
+        Map<Long, List<Long>> chkptTouchedPages = logRecord.getTransactionTouchedPages();
+
+        // update DPT with recLSN from endpoint's DPT
+        for (long pageNum : chkptDPT.keySet()) {
+            dirtyPageTable.put(pageNum, chkptDPT.get(pageNum));
+        }
+
+        // update txnTable with endpoint's txnTable
+        for (long transNum : chkptTxnTable.keySet()) {
+            if (!transactionTable.containsKey(transNum)) {
+                Transaction transaction = newTransaction.apply(transNum);
+                startTransaction(transaction);
+            }
+            TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+            transactionEntry.lastLSN =
+                    Math.max(transactionEntry.lastLSN, chkptTxnTable.get(transNum).getSecond());
+            if (transactionStatusTransitionable(transactionEntry.transaction.getStatus(), chkptTxnTable.get(transNum).getFirst())) {
+                transactionEntry.transaction.setStatus(chkptTxnTable.get(transNum).getFirst());
+            }
+        }
+
+        // update touchedPages and acquire X locks
+        for (long transNum : chkptTouchedPages.keySet()) {
+            if (transactionTable.containsKey(transNum)) {
+                for (long touchedPage : chkptTouchedPages.get(transNum)) {
+                    transactionTable.get(transNum).touchedPages.add(touchedPage);
+                    acquireTransactionLock(transactionTable.get(transNum).transaction, getPageLockContext(touchedPage), LockType.X);
+                }
+            }
+        }
+    }
+
     /**
      * This method performs the analysis pass of restart recovery.
      *
@@ -673,7 +748,54 @@ public class ARIESRecoveryManager implements RecoveryManager {
         long LSN = masterRecord.lastCheckpointLSN;
 
         // TODO(proj5_part2): implement
-        return;
+        Iterator<LogRecord> ite = logManager.scanFrom(LSN);
+        while (ite.hasNext()) {
+            LogRecord logRecord = ite.next();
+            // Transaction operations related log
+            if (logRecord.getTransNum().isPresent()) {
+                long transNum = logRecord.getTransNum().get();
+                if (!transactionTable.containsKey(transNum)) {
+                    Transaction transaction = newTransaction.apply(transNum);
+                    startTransaction(transaction);
+                }
+                TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+                transactionEntry.lastLSN =
+                        Math.max(transactionEntry.lastLSN, logRecord.getLSN());
+
+                // Page operations related log
+                if (logRecord.getPageNum().isPresent()) {
+                    analyzePageOperationRelatedLog(logRecord, transactionEntry);
+                }
+
+                // Transaction status related log
+                if (logRecord.getType() == LogType.COMMIT_TRANSACTION) {
+                    // transaction table updated before
+                    // update transaction status
+                    transactionEntry.transaction.setStatus(Transaction.Status.COMMITTING);
+                } else if (logRecord.getType() == LogType.ABORT_TRANSACTION) {
+                    // transaction table updated before
+                    // update transaction status
+                    transactionEntry.transaction.setStatus(Transaction.Status.RECOVERY_ABORTING);
+                } else if (logRecord.getType() == LogType.END_TRANSACTION) {
+                    transactionEntry.transaction.cleanup();
+                    transactionEntry.transaction.setStatus(Transaction.Status.COMPLETE);
+                    transactionTable.remove(transNum);
+                }
+            }
+
+            // Checkpoint record
+            if (logRecord.getType() == LogType.BEGIN_CHECKPOINT) {
+                BeginCheckpointLogRecord beginRecord = (BeginCheckpointLogRecord) logRecord;
+                if (beginRecord.getMaxTransactionNum().isPresent()) {
+                    updateTransactionCounter.accept(beginRecord.getMaxTransactionNum().get());
+                }
+            }
+            if (logRecord.getType() == LogType.END_CHECKPOINT) {
+                analyzeEndCheckPointLog((EndCheckpointLogRecord) logRecord);
+            }
+        }
+
+        endingTransactionsAfterAnalysis();
     }
 
     /**
@@ -780,5 +902,17 @@ public class ARIESRecoveryManager implements RecoveryManager {
         public int compare(Pair<A, B> p0, Pair<A, B> p1) {
             return p1.getFirst().compareTo(p0.getFirst());
         }
+    }
+
+    /**
+     * Returns if current status can transition into transitioning status.
+     * Transactions will always advance through states in one of two ways:
+     * running -> committing -> complete
+     * running -> aborting -> complete
+     */
+    private boolean transactionStatusTransitionable(Transaction.Status currentStatus, Transaction.Status transitioningStatus) {
+        if (transitioningStatus == Transaction.Status.COMPLETE && currentStatus != Transaction.Status.RUNNING) return true;
+        if (currentStatus == Transaction.Status.RUNNING && transitioningStatus != Transaction.Status.COMPLETE) return true;
+        return false;
     }
 }
