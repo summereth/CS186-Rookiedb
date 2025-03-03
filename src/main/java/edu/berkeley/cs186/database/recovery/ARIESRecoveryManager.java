@@ -212,28 +212,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
         while (currentLSN > LSN) {
             LogRecord logRecord = logManager.fetchLogRecord(currentLSN);
             if (logRecord.isUndoable()) {
-                // write CLR and flush if necessary
-                Pair<LogRecord, Boolean> undoRes = logRecord.undo(transactionEntry.lastLSN);
-                long undoLSN = logManager.appendToLog(undoRes.getFirst());
-                if (undoRes.getSecond()) {
-                    logManager.flushToLSN(undoLSN);
-                }
-                // update lastLSN in xact table
-                transactionEntry.lastLSN = undoLSN;
-                // update DPT if necessary
-                if (logRecord.getType() == LogType.UPDATE_PAGE) {
-                    assert logRecord.getPageNum().isPresent();
-                    dirtyPageTable.putIfAbsent(logRecord.getPageNum().get(), undoLSN);
-                }
-                if (logRecord.getType() == LogType.ALLOC_PAGE
-                        && dirtyPageTable.containsKey(logRecord.getPageNum().get())
-                        && dirtyPageTable.get(logRecord.getPageNum().get()) == currentLSN) {
-                    dirtyPageTable.remove(logRecord.getPageNum().get());
-                }
-                // perform undo
-                undoRes.getFirst().redo(diskSpaceManager, bufferManager);
-
-                currentLSN = undoRes.getFirst().getUndoNextLSN().orElse(-1L);
+                currentLSN = undoLog(logRecord);
 
                 // For testing
 //                System.out.println("XACT Table: " + transactionEntry);
@@ -860,7 +839,29 @@ public class ARIESRecoveryManager implements RecoveryManager {
      */
     void restartUndo() {
         // TODO(proj5_part2): implement
-        return;
+        // create priority queue sorted on lastLSN of all aborting transactions.
+        PriorityQueue<LogRecord> toUndo = new PriorityQueue<>(
+                (a, b) -> Long.compare(b.getLSN(), a.getLSN())
+        );
+        for (TransactionTableEntry txnEntry : transactionTable.values()) {
+            if (txnEntry.transaction.getStatus() == Transaction.Status.RECOVERY_ABORTING) {
+                toUndo.offer(logManager.fetchLogRecord(txnEntry.lastLSN));
+            }
+        }
+
+        // work on largest LSN in the priority queue
+        while (!toUndo.isEmpty()) {
+            LogRecord logRecord = toUndo.poll();
+            if (logRecord.isUndoable()) {
+                undoLog(logRecord);
+            }
+            long nextLSN = logRecord.getUndoNextLSN().orElse(logRecord.getPrevLSN().orElse(0L));
+            if (nextLSN == 0L && logRecord.getTransNum().isPresent()) {
+                end(logRecord.getTransNum().get());
+            } else {
+                toUndo.offer(logManager.fetchLogRecord(nextLSN));
+            }
+        }
     }
 
     /**
@@ -948,5 +949,33 @@ public class ARIESRecoveryManager implements RecoveryManager {
         if (transitioningStatus == Transaction.Status.COMPLETE && currentStatus != Transaction.Status.RUNNING) return true;
         if (currentStatus == Transaction.Status.RUNNING && transitioningStatus != Transaction.Status.COMPLETE) return true;
         return false;
+    }
+
+    /**
+     * Performs undo on given log record lsn, and returns the next lsn to undo or -1L
+     */
+    private long undoLog(LogRecord logRecord) {
+        assert logRecord.getTransNum().isPresent();
+        TransactionTableEntry txnEntry = transactionTable.get(logRecord.getTransNum().get());
+        // write CLR and flush if necessary
+        Pair<LogRecord, Boolean> undoRes = logRecord.undo(txnEntry.lastLSN);
+        long undoLSN = logManager.appendToLog(undoRes.getFirst());
+        if (undoRes.getSecond()) {
+            logManager.flushToLSN(undoLSN);
+        }
+        // update lastLSN in xact table
+        txnEntry.lastLSN = undoLSN;
+        // update DPT if necessary
+        if (logRecord.getType() == LogType.UPDATE_PAGE) {
+            assert logRecord.getPageNum().isPresent();
+            dirtyPageTable.putIfAbsent(logRecord.getPageNum().get(), undoLSN);
+        }
+        if (logRecord.getType() == LogType.ALLOC_PAGE) {
+            dirtyPageTable.remove(logRecord.getPageNum().get());
+        }
+        // perform undo
+        undoRes.getFirst().redo(diskSpaceManager, bufferManager);
+
+        return undoRes.getFirst().getUndoNextLSN().orElse(-1L);
     }
 }
