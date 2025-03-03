@@ -3,12 +3,15 @@ package edu.berkeley.cs186.database.recovery;
 import edu.berkeley.cs186.database.Transaction;
 import edu.berkeley.cs186.database.TransactionContext;
 import edu.berkeley.cs186.database.common.Pair;
+import edu.berkeley.cs186.database.concurrency.DummyLockContext;
 import edu.berkeley.cs186.database.concurrency.LockContext;
 import edu.berkeley.cs186.database.concurrency.LockType;
 import edu.berkeley.cs186.database.concurrency.LockUtil;
 import edu.berkeley.cs186.database.io.DiskSpaceManager;
 import edu.berkeley.cs186.database.memory.BufferManager;
+import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.recovery.records.*;
+import edu.berkeley.cs186.database.table.Record;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -810,7 +813,38 @@ public class ARIESRecoveryManager implements RecoveryManager {
      */
     void restartRedo() {
         // TODO(proj5_part2): implement
-        return;
+        Set<LogType> partTypes = Set.of(LogType.ALLOC_PART, LogType.UNDO_ALLOC_PART, LogType.FREE_PART, LogType.UNDO_FREE_PART);
+        Set<LogType> allocPageTypes = Set.of(LogType.ALLOC_PAGE, LogType.UNDO_FREE_PAGE);
+        Set<LogType> modPageTypes = Set.of(LogType.FREE_PAGE, LogType.UNDO_ALLOC_PAGE, LogType.UPDATE_PAGE, LogType.UNDO_UPDATE_PAGE);
+
+        long LSN = Long.MAX_VALUE;
+        for (long recLSN : dirtyPageTable.values()) {
+            LSN = Math.min(LSN, recLSN);
+        }
+        Iterator<LogRecord> ite = logManager.scanFrom(LSN);
+        while (ite.hasNext()) {
+            LogRecord logRecord = ite.next();
+            if (!logRecord.isRedoable()) continue;
+
+            if (partTypes.contains(logRecord.getType()) || allocPageTypes.contains(logRecord.getType())) {
+                logRecord.redo(diskSpaceManager, bufferManager);
+            } else if (modPageTypes.contains(logRecord.getType())) {
+                assert logRecord.getPageNum().isPresent();
+                long pageNum = logRecord.getPageNum().get();
+                if (!dirtyPageTable.containsKey(pageNum) || dirtyPageTable.get(pageNum) > logRecord.getLSN()) continue;
+
+                Page page = bufferManager.fetchPage(new DummyLockContext(), pageNum);
+                try {
+                    long pageLSN = page.getPageLSN();
+                    if (pageLSN < logRecord.getLSN()) {
+                        logRecord.redo(diskSpaceManager, bufferManager);
+                    }
+                } finally {
+                    page.unpin();
+                }
+            }
+        }
+
     }
 
     /**
