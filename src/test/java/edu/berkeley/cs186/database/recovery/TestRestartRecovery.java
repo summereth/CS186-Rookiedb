@@ -266,7 +266,7 @@ public class TestRestartRecovery {
         runAnalysis(recoveryManager);
 
         // check log
-        Iterator<LogRecord> iter = logManager.scanFrom(10000L);
+        Iterator<LogRecord> iter = logManager.scanFrom(20000L);
         assertEquals(new EndTransactionLogRecord(2L, LSNs.get(12)), iter.next());
         assertEquals(new AbortTransactionLogRecord(4L, 0L), iter.next());
         assertEquals(new AbortTransactionLogRecord(5L, LSNs.get(16)), iter.next());
@@ -274,7 +274,7 @@ public class TestRestartRecovery {
         assertFalse(iter.hasNext());
 
         assertEquals(0xf00dbaaeL, getTransactionCounter(recoveryManager));
-        assertEquals(9999L, logManager.getFlushedLSN());
+        assertEquals(19999L, logManager.getFlushedLSN());
     }
 
     /**
@@ -514,7 +514,7 @@ public class TestRestartRecovery {
         assertEquals(Transaction.Status.COMPLETE, t1.getStatus());
         assertFalse(transactionTable.containsKey(1L));
 
-        Iterator<LogRecord> iter = logManager.scanFrom(10000L);
+        Iterator<LogRecord> iter = logManager.scanFrom(20000L);
 
         LogRecord next = iter.next();
         assertEquals(logManager.fetchLogRecord(LSNs.get(0)).undo(LSNs.get(5)).getFirst(), next);
@@ -598,7 +598,7 @@ public class TestRestartRecovery {
         }, (LogRecord record) -> {
             assertEquals(LogType.UNDO_ALLOC_PAGE, record.getType());
             assertNotNull("log record not appended to log yet", record.LSN);
-            assertEquals(19999L, logManager1.getFlushedLSN()); // flushed
+            assertEquals(29999L, logManager1.getFlushedLSN()); // flushed
             assertEquals((long) record.LSN, transactionTable.get(1L).lastLSN);
             assertEquals(Optional.of(10000000099L), record.getPageNum());
         }, (LogRecord record) -> {
@@ -617,7 +617,7 @@ public class TestRestartRecovery {
         assertFalse(transactionTable.containsKey(1L));
 
         // 5
-        Iterator<LogRecord> iter = logManager.scanFrom(10000L);
+        Iterator<LogRecord> iter = logManager.scanFrom(20000L);
 
         LogRecord next = iter.next();
         assertEquals(logManager.fetchLogRecord(LSNs.get(2)).undo(LSNs.get(3)).getFirst(), next);

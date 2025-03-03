@@ -97,6 +97,8 @@ public class LogManager implements Iterable<LogRecord>, AutoCloseable {
             logTailBuffer.put(bytes);
             long LSN = makeLSN(unflushedLogTail.getLast().getPageNum(), pos);
             record.LSN = LSN;
+            // For testing
+            System.out.println("Appending to log tail: " + record);
             return LSN;
         } finally {
             logTail.unpin();
